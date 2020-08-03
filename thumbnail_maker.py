@@ -22,15 +22,20 @@ class ThumbnailMakerService(object):
 
         self.dl_lock = threading.Lock()
 
+        # Let's say that we have some kind of limit on concurrent downloads
+        max_concurrent_dl = 4
+        self.dl_sm = threading.Semaphore(max_concurrent_dl)
+
     def download_image(self, url):
         # download each image and save to the input dir
-        img_filename = urlparse(url).path.split('/')[-1]
-        dest_path = self.input_dir + os.path.sep + img_filename
-        urlretrieve(url, dest_path)
+        with self.dl_sm: # this will auto acquire and release
+            img_filename = urlparse(url).path.split('/')[-1]
+            dest_path = self.input_dir + os.path.sep + img_filename
+            urlretrieve(url, dest_path)
 
-        img_size = os.path.getsize(dest_path)
-        with self.dl_lock:
-            self.downloaded_bytes += img_size # this updating could end up in race condition
+            img_size = os.path.getsize(dest_path)
+            with self.dl_lock:
+                self.downloaded_bytes += img_size # this updating could end up in race condition
 
     def download_images(self, img_url_list):
         # validate inputs
