@@ -20,27 +20,21 @@ class ThumbnailMakerService(object):
         self.input_dir = self.home_dir + os.path.sep + 'incoming'
         self.output_dir = self.home_dir + os.path.sep + 'outgoing'
 
+        self.dl_queue = Queue()
         self.img_queue = Queue()
 
-    def download_images(self, img_url_list):
-        # validate inputs
-        if not img_url_list:
-            return
-        os.makedirs(self.input_dir, exist_ok=True)
-        
-        logging.info("beginning image downloads")
-
-        start = time.perf_counter()
-        for url in img_url_list:
-            # download each image and save to the input dir 
-            img_filename = urlparse(url).path.split('/')[-1]
-            urlretrieve(url, self.input_dir + os.path.sep + img_filename)
-            self.img_queue.put(img_filename)
-        end = time.perf_counter()
-
-        #Poison pill
-        self.img_queue.put(None)
-        logging.info("downloaded {} images in {} seconds".format(len(img_url_list), end - start))
+    def download_image(self):
+        while not self.dl_queue.empty():
+            try:
+                url = self.dl_queue.get(block=False)
+                # download each image and save to the input dir 
+                img_filename = urlparse(url).path.split('/')[-1]
+                urlretrieve(url, self.input_dir + os.path.sep + img_filename)
+                self.img_queue.put(img_filename)
+                
+                self.dl_queue.task_done()
+            except Queue.Empty:
+                pass
 
     def perform_resizing(self):
         os.makedirs(self.output_dir, exist_ok=True)
@@ -79,14 +73,19 @@ class ThumbnailMakerService(object):
         logging.info("START make_thumbnails")
         start = time.perf_counter()
 
-        t1 = Thread(target=self.download_images, args=([img_url_list]))
-        t2 = Thread(target=self.perform_resizing)
+        for img_url in img_url_list:
+            self.dl_queue.put(img_url)
+        
+        num_dl_threads = 4
+        for _ in range(num_dl_threads):
+            t = Thread(target=self.download_image)
+            t.start()
 
-        t1.start()
+        t2 = Thread(target=self.perform_resizing)
         t2.start()
 
-
-        t1.join()
+        self.dl_queue.join() # block the main thread till all downloads are complete.
+        self.img_queue.put(None) # put the poison pill
         t2.join()
 
         end = time.perf_counter()
